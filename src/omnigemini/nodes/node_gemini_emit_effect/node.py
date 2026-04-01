@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import TYPE_CHECKING, Any
 
 from omnibase_core.nodes.node_effect import NodeEffect
@@ -26,10 +27,9 @@ class NodeGeminiEmitEffect(NodeEffect):
 
     async def start(self) -> None:
         """Initialize the Kafka event bus."""
-        # In a real implementation, we'd get these from config
         kafka_config = ModelKafkaEventBusConfig(
-            bootstrap_servers="localhost:19092",
-            environment="local",
+            bootstrap_servers=os.environ["KAFKA_BOOTSTRAP_SERVERS"],
+            environment=os.environ.get("ONEX_ENVIRONMENT", "local"),
         )
         self._event_bus = EventBusKafka(config=kafka_config)
         await self._event_bus.start()
