@@ -1,0 +1,59 @@
+# SPDX-FileCopyrightText: 2025 OmniNode.ai Inc.
+# SPDX-License-Identifier: MIT
+
+# Copyright (c) 2026 OmniNode Team
+#
+# ONEX Node Contract
+# Node: NodeSkillPrPolishOrchestrator
+# Skill: pr-polish
+# Created: 2026-03-31
+#
+# Orchestrator shell node: dispatches skill invocations to the Gemini-native
+# execution backend. All heavy logic lives in the shared handler.
+
+# Contract identifiers
+name: node_skill_pr_polish_orchestrator
+contract_name: node_skill_pr_polish_orchestrator
+node_name: node_skill_pr_polish_orchestrator
+
+contract_version:
+  major: 1
+  minor: 0
+  patch: 0
+
+node_version:
+  major: 1
+  minor: 0
+  patch: 0
+
+# Node type
+node_type: ORCHESTRATOR_GENERIC
+
+# Description
+description: >
+  Orchestrator node for the Gemini-native pr-polish skill.
+  Handles PR diagnosis and surgical fixes for Track BPRs using Gemini's
+  long context window.
+
+# Strongly typed I/O models
+input_model:
+  name: ModelSkillRequest
+  module: omnigemini.shared.models
+
+output_model:
+  name: ModelSkillResult
+  module: omnigemini.shared.models
+
+# Dynamic Topic Registration (OMN-1588)
+yaml_consumed_events:
+  - "onex.evt.omnigemini.skill-requested.v1"
+
+yaml_published_events:
+  - topic: "onex.evt.omnigemini.skill-started.v1"
+    event_type: ModelSkillStarted
+  - topic: "onex.evt.omnigemini.skill-completed.v1"
+    event_type: ModelSkillCompleted
+
+# Execution backend configuration
+execution:
+  backend: gemini_cli

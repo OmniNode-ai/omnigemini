@@ -1,0 +1,2250 @@
+# SPDX-FileCopyrightText: 2025 OmniNode.ai Inc.
+# SPDX-License-Identifier: MIT
+
+name: CI
+
+# Consolidated CI pipeline for OmniClaude (OMN-2228)
+# Replaces ci-cd.yml + enhanced-ci.yml into a single workflow
+# with gate aggregators per CI/CD Standards v2
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  merge_group:
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  PYTHON_VERSION: '3.12'
+  # ONEX state directory — required by hooks/lib/onex_state.py (OMN-5632)
+  ONEX_STATE_DIR: /tmp/onex-state
+
+jobs:
+  # ============================================================================
+  # QUALITY CHECKS
+  # ============================================================================
+
+  quality:
+    name: Code Quality
+    # OMNINODE_SELF_HOSTED_RUNS_ON_V1 — do not edit inline; update plan + all occurrences together
+    runs-on: >-
+      ${{
+        (vars.USE_SELF_HOSTED_RUNNERS == 'true' &&
+         (github.event_name == 'push' ||
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule'))
+        && fromJSON('["self-hosted","omnibase-ci"]')
+        || fromJSON('["ubuntu-latest"]')
+      }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.6.1"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Load cached venv
+        uses: actions/cache@v5
+        with:
+          path: .venv
+          key: uv-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+
+      - name: Install dependencies
+        run: uv sync --frozen --group dev
+
+      - name: Ruff format check
+        run: uv run ruff format --check src/ tests/
+
+      - name: Ruff lint
+        run: uv run ruff check src/ tests/
+
+      - name: Mypy type checking
+        run: |
+          # Phase 1: Non-blocking (report errors but don't fail CI)
+          # Phase 2: Fix errors and make blocking (TODO: remove || true)
+          # TODO(OMN-XXXX): Make mypy blocking in Phase 2
+          uv run mypy src/ --config-file mypy.ini 2>&1 | tee mypy-output.txt || true
+          ERROR_COUNT=$(grep -c "error:" mypy-output.txt 2>/dev/null || echo "0")
+          echo "MyPy Summary: $ERROR_COUNT type errors found"
+          if [ "$ERROR_COUNT" -gt "0" ]; then
+            echo "MyPy found $ERROR_COUNT type errors (non-blocking for now)"
+          fi
+
+  docs-links:
+    name: Markdown Link Check
+    # OMNINODE_SELF_HOSTED_RUNS_ON_V1 — do not edit inline; update plan + all occurrences together
+    runs-on: >-
+      ${{
+        (vars.USE_SELF_HOSTED_RUNNERS == 'true' &&
+         (github.event_name == 'push' ||
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule'))
+        && fromJSON('["self-hosted","omnibase-ci"]')
+        || fromJSON('["ubuntu-latest"]')
+      }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      # Detect whether any *.md files changed (path filter to avoid noise on code-only PRs)
+      - name: Check for changed markdown files
+        id: md-changed
+        if: github.event_name == 'pull_request'
+        uses: tj-actions/changed-files@v47
+        with:
+          files: |
+            **/*.md
+
+      - name: Check markdown links
+        # On PRs: only run when *.md files changed. On push to main/develop: always run.
+        if: github.event_name == 'push' || steps.md-changed.outputs.any_changed == 'true'
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: >
+            --no-progress
+            --exclude 'https://linear\.app'
+            --exclude 'https://github\.com/OmniNode-ai'
+            --exclude 'https://github\.com/fastapi'
+            --exclude 'https://stackoverflow\.com'
+            --exclude 'https://staging\.omniclaude\.example\.com'
+            --exclude 'https://omniclaude\.example\.com'
+            --exclude 'http://localhost'
+            --exclude 'https://www\.gnu\.org'
+            --exclude 'https://www\.contributor-covenant\.org'
+            --exclude 'https://claude\.ai'
+            --exclude 'https://freedesktop\.org'
+            --exclude 'https://www\.freedesktop\.org'
+            --exclude 'https://github\.com/fastapi'
+            --exclude 'https://stackoverflow\.com'
+            --exclude 'https://dash\.dev\.omninode\.ai'
+            --accept 200..=299,429,503
+            '**/*.md'
+          fail: true
+
+  pyright:
+    name: Pyright Type Checking
+    # OMNINODE_SELF_HOSTED_RUNS_ON_V1 — do not edit inline; update plan + all occurrences together
+    runs-on: >-
+      ${{
+        (vars.USE_SELF_HOSTED_RUNNERS == 'true' &&
+         (github.event_name == 'push' ||
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule'))
+        && fromJSON('["self-hosted","omnibase-ci"]')
+        || fromJSON('["ubuntu-latest"]')
+      }}
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.6.1"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Load cached venv
+        uses: actions/cache@v5
+        with:
+          path: .venv
+          key: uv-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+
+      - name: Install dependencies
+        run: uv sync --frozen --group dev
+
+      - name: Pyright
+        run: uv run pyright src/omniclaude
+
+  check-handshake:
+    name: Architecture Handshake
+    # OMNINODE_SELF_HOSTED_RUNS_ON_V1 — do not edit inline; update plan + all occurrences together
+    runs-on: >-
+      ${{
+        (vars.USE_SELF_HOSTED_RUNNERS == 'true' &&
+         (github.event_name == 'push' ||
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule'))
+        && fromJSON('["self-hosted","omnibase-ci"]')
+        || fromJSON('["ubuntu-latest"]')
+      }}
+    if: github.event.pull_request.head.repo.full_name == github.repository || github.event_name != 'pull_request'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Checkout omnibase_core
+        uses: actions/checkout@v6
+        with:
+          repository: OmniNode-ai/omnibase_core
+          path: omnibase_core
+
+      - name: Verify handshake is current
+        run: ./omnibase_core/architecture-handshakes/check-handshake.sh ./omnibase_core
+
+  enum-governance:
+    name: Enum Governance
+    # OMNINODE_SELF_HOSTED_RUNS_ON_V1 — do not edit inline; update plan + all occurrences together
+    runs-on: >-
+      ${{
+        (vars.USE_SELF_HOSTED_RUNNERS == 'true' &&
+         (github.event_name == 'push' ||
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule'))
+        && fromJSON('["self-hosted","omnibase-ci"]')
+        || fromJSON('["ubuntu-latest"]')
+      }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.6.1"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Load cached venv
+        uses: actions/cache@v5
+        with:
+          path: .venv
+          key: uv-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+
+      - name: Install dependencies
+        run: uv sync --frozen --group dev
+
+      - name: Validate enum governance
+        run: uv run python scripts/validation/validate_enum_governance.py
+
+  exports-validation:
+    name: Exports Validation
+    # OMNINODE_SELF_HOSTED_RUNS_ON_V1 — do not edit inline; update plan + all occurrences together
+    runs-on: >-
+      ${{
+        (vars.USE_SELF_HOSTED_RUNNERS == 'true' &&
+         (github.event_name == 'push' ||
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule'))
+        && fromJSON('["self-hosted","omnibase-ci"]')
+        || fromJSON('["ubuntu-latest"]')
+      }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.6.1"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Load cached venv
+        uses: actions/cache@v5
+        with:
+          path: .venv
+          key: uv-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+
+      - name: Install dependencies
+        run: uv sync --frozen --group dev
+
+      - name: Validate exports
+        run: uv run python scripts/validation/validate_exports.py
+
+  env-var-registry:
+    name: "Env Var Registry (OMN-6263)"
+    # OMNINODE_SELF_HOSTED_RUNS_ON_V1 — do not edit inline; update plan + all occurrences together
+    runs-on: >-
+      ${{
+        (vars.USE_SELF_HOSTED_RUNNERS == 'true' &&
+         (github.event_name == 'push' ||
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule'))
+        && fromJSON('["self-hosted","omnibase-ci"]')
+        || fromJSON('["ubuntu-latest"]')
+      }}
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.6.1"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Check env var registry completeness
+        run: |
+          echo "================================================================"
+          echo "Env Var Registry: os.getenv refs vs .env.example (OMN-6263)"
+          echo "================================================================"
+          python scripts/ci/check_env_var_registry.py \
+            --scan-dirs src/omniclaude plugins/onex/hooks/lib \
+            --registry .env.example \
+            --allowlist-file .env.allowlist \
+            --format text
+
+  cross-repo-validation:
+    name: Kafka Import Guard
+    # OMNINODE_SELF_HOSTED_RUNS_ON_V1 — do not edit inline; update plan + all occurrences together
+    runs-on: >-
+      ${{
+        (vars.USE_SELF_HOSTED_RUNNERS == 'true' &&
+         (github.event_name == 'push' ||
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule'))
+        && fromJSON('["self-hosted","omnibase-ci"]')
+        || fromJSON('["ubuntu-latest"]')
+      }}
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.6.1"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Load cached venv
+        uses: actions/cache@v5
+        with:
+          path: .venv
+          key: uv-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+
+      - name: Install dependencies
+        run: uv sync --frozen --group dev
+
+      - name: Kafka import guard
+        run: uv run python -m omnibase_core.validation.cross_repo --policy .cross-repo-policy.yaml
+
+  migration-freeze:
+    name: Migration Freeze
+    # OMNINODE_SELF_HOSTED_RUNS_ON_V1 — do not edit inline; update plan + all occurrences together
+    runs-on: >-
+      ${{
+        (vars.USE_SELF_HOSTED_RUNNERS == 'true' &&
+         (github.event_name == 'push' ||
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule'))
+        && fromJSON('["self-hosted","omnibase-ci"]')
+        || fromJSON('["ubuntu-latest"]')
+      }}
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Check migration freeze
+        run: ./scripts/check_migration_freeze.sh --ci
+        env:
+          MIGRATION_CHECK_BASE: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
+          MIGRATION_FREEZE_BYPASS: ${{ contains(github.event.pull_request.labels.*.name, 'db-split-bypass') && 'true' || '' }}
+
+  onex-validation:
+    name: ONEX Compliance
+    # OMNINODE_SELF_HOSTED_RUNS_ON_V1 — do not edit inline; update plan + all occurrences together
+    runs-on: >-
+      ${{
+        (vars.USE_SELF_HOSTED_RUNNERS == 'true' &&
+         (github.event_name == 'push' ||
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule'))
+        && fromJSON('["self-hosted","omnibase-ci"]')
+        || fromJSON('["ubuntu-latest"]')
+      }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.6.1"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Validate ONEX naming conventions
+        run: |
+          set -e
+          NODE_FILES=$(find src/omniclaude/ -name "node_*.py" -type f 2>/dev/null || true)
+          if [ -z "$NODE_FILES" ]; then
+            echo "No ONEX node files found -- skipping (expected for schema-only phase)"
+            exit 0
+          fi
+          FAILED=false
+          while read -r file; do
+            if [[ "$file" == *"_effect.py" ]] && ! grep -q "class Node.*Effect" "$file"; then
+              echo "ERROR: $file should define class Node<Name>Effect"
+              FAILED=true
+            fi
+            if [[ "$file" == *"_compute.py" ]] && ! grep -q "class Node.*Compute" "$file"; then
+              echo "ERROR: $file should define class Node<Name>Compute"
+              FAILED=true
+            fi
+            if [[ "$file" == *"_reducer.py" ]] && ! grep -q "class Node.*Reducer" "$file"; then
+              echo "ERROR: $file should define class Node<Name>Reducer"
+              FAILED=true
+            fi
+            if [[ "$file" == *"_orchestrator.py" ]] && ! grep -q "class Node.*Orchestrator" "$file"; then
+              echo "ERROR: $file should define class Node<Name>Orchestrator"
+              FAILED=true
+            fi
+          done <<< "$NODE_FILES"
+          if [ "$FAILED" = "true" ]; then exit 1; fi
+          echo "All ONEX naming conventions validated"
+
+      - name: Validate ONEX contracts
+        run: |
+          set -e
+          NODE_FILES=$(find src/omniclaude/ -name "node_*.py" -type f 2>/dev/null || true)
+          if [ -z "$NODE_FILES" ]; then
+            echo "No ONEX node files found -- skipping"
+            exit 0
+          fi
+          while read -r file; do
+            if ! grep -q "ModelContract" "$file" 2>/dev/null; then
+              echo "WARNING: $file may be missing ModelContract usage"
+            fi
+          done <<< "$NODE_FILES"
+          echo "Contract validation completed"
+
+      - name: Validate ONEX method signatures
+        run: |
+          set -e
+          EFFECT_FILES=$(find src/omniclaude/ -name "*_effect.py" -type f 2>/dev/null || true)
+          if [ -z "$EFFECT_FILES" ]; then
+            echo "No ONEX Effect node files found -- skipping"
+            exit 0
+          fi
+          while read -r file; do
+            if grep -q "class Node.*Effect" "$file" && ! grep -q "async def execute_effect" "$file"; then
+              echo "WARNING: $file Effect node should implement async def execute_effect()"
+            fi
+          done <<< "$EFFECT_FILES"
+          echo "Method signature validation completed"
+
+  # ============================================================================
+  # ARCHITECTURE ENFORCEMENT (OMN-2592 — Wave 0 prerequisite)
+  # These 11 checks must all be green before any feature branch can merge.
+  # They enforce architectural invariants: no DB in orchestrators, no direct
+  # Kafka producers, no naive UTC datetimes, and topic naming conventions.
+  # ============================================================================
+
+  arch-no-db-in-orchestrator:
+    name: "Arch: No DB access in orchestrator/compute (checks 1 & 8)"
+    # OMNINODE_SELF_HOSTED_RUNS_ON_V1 — do not edit inline; update plan + all occurrences together
+    runs-on: >-
+      ${{
+        (vars.USE_SELF_HOSTED_RUNNERS == 'true' &&
+         (github.event_name == 'push' ||
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule'))
+        && fromJSON('["self-hosted","omnibase-ci"]')
+        || fromJSON('["ubuntu-latest"]')
+      }}
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Check no DB access in orchestrator/compute (static)
+        run: python3 scripts/validation/validate_no_db_in_orchestrator.py
+
+  arch-no-git-outside-effects:
+    name: "Arch: No git/gh calls outside effects (check 2)"
+    # OMNINODE_SELF_HOSTED_RUNS_ON_V1 — do not edit inline; update plan + all occurrences together
+    runs-on: >-
+      ${{
+        (vars.USE_SELF_HOSTED_RUNNERS == 'true' &&
+         (github.event_name == 'push' ||
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule'))
+        && fromJSON('["self-hosted","omnibase-ci"]')
+        || fromJSON('["ubuntu-latest"]')
+      }}
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Check no git/gh subprocess calls outside effects
+        run: python3 scripts/validation/validate_no_git_outside_effects.py
+
+  arch-no-linear-outside-effects:
+    name: "Arch: No LinearClient outside effects (check 3)"
+    # OMNINODE_SELF_HOSTED_RUNS_ON_V1 — do not edit inline; update plan + all occurrences together
+    runs-on: >-
+      ${{
+        (vars.USE_SELF_HOSTED_RUNNERS == 'true' &&
+         (github.event_name == 'push' ||
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule'))
+        && fromJSON('["self-hosted","omnibase-ci"]')
+        || fromJSON('["ubuntu-latest"]')
+      }}
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Check no LinearClient outside effects
+        run: python3 scripts/validation/validate_no_linear_outside_effects.py
+
+  arch-no-repo-adapter-in-orchestrator:
+    name: "Arch: No repository adapter imports in orchestrator/compute (check 4)"
+    # OMNINODE_SELF_HOSTED_RUNS_ON_V1 — do not edit inline; update plan + all occurrences together
+    runs-on: >-
+      ${{
+        (vars.USE_SELF_HOSTED_RUNNERS == 'true' &&
+         (github.event_name == 'push' ||
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule'))
+        && fromJSON('["self-hosted","omnibase-ci"]')
+        || fromJSON('["ubuntu-latest"]')
+      }}
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Check no repository adapter imports in orchestrator/compute
+        run: python3 scripts/validation/validate_no_repo_adapter_in_orchestrator.py
+
+  arch-cost-ledger-isolation:
+    name: "Arch: ModelCostLedger confined to effects (check 5)"
+    # OMNINODE_SELF_HOSTED_RUNS_ON_V1 — do not edit inline; update plan + all occurrences together
+    runs-on: >-
+      ${{
+        (vars.USE_SELF_HOSTED_RUNNERS == 'true' &&
+         (github.event_name == 'push' ||
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule'))
+        && fromJSON('["self-hosted","omnibase-ci"]')
+        || fromJSON('["ubuntu-latest"]')
+      }}
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Check cost ledger isolation
+        run: python3 scripts/validation/validate_cost_ledger_isolation.py
+
+  arch-topic-naming:
+    name: "Arch: onex.* topic naming convention (check 6)"
+    # OMNINODE_SELF_HOSTED_RUNS_ON_V1 — do not edit inline; update plan + all occurrences together
+    runs-on: >-
+      ${{
+        (vars.USE_SELF_HOSTED_RUNNERS == 'true' &&
+         (github.event_name == 'push' ||
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule'))
+        && fromJSON('["self-hosted","omnibase-ci"]')
+        || fromJSON('["ubuntu-latest"]')
+      }}
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Check topic naming convention
+        run: python3 scripts/validation/validate_topic_naming.py
+
+  arch-omnidash-db-role:
+    name: "Arch: omnidash_readonly role provisioning + CI (check 7)"
+    # OMNINODE_SELF_HOSTED_RUNS_ON_V1 — do not edit inline; update plan + all occurrences together
+    runs-on: >-
+      ${{
+        (vars.USE_SELF_HOSTED_RUNNERS == 'true' &&
+         (github.event_name == 'push' ||
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule'))
+        && fromJSON('["self-hosted","omnibase-ci"]')
+        || fromJSON('["ubuntu-latest"]')
+      }}
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-client
+
+      - name: Provision omnidash_readonly role and verify permissions
+        env:
+          PGPASSWORD: postgres
+        run: |
+          set -e
+
+          # Wait for Postgres to be ready
+          until psql -h localhost -U postgres -c '\q' 2>/dev/null; do
+            echo "Waiting for PostgreSQL..."
+            sleep 2
+          done
+
+          # Provision omnidash_readonly role
+          psql -h localhost -U postgres <<'SQL'
+            -- Create omnidash analytics database if it doesn't exist
+            SELECT 'CREATE DATABASE omnidash_analytics'
+              WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'omnidash_analytics')
+            \gexec
+
+            -- Create omnidash_readonly role if it doesn't exist
+            DO $$
+            BEGIN
+              IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'omnidash_readonly') THEN
+                CREATE ROLE omnidash_readonly WITH LOGIN PASSWORD 'readonly_ci_test';
+              END IF;
+            END
+            $$;
+
+            -- Grant SELECT-only on omnidash_analytics
+            GRANT CONNECT ON DATABASE omnidash_analytics TO omnidash_readonly;
+          SQL
+
+          # Connect to omnidash_analytics and set up schema permissions
+          psql -h localhost -U postgres -d omnidash_analytics <<'SQL'
+            -- Grant usage on public schema
+            GRANT USAGE ON SCHEMA public TO omnidash_readonly;
+            -- Grant SELECT on all current tables
+            GRANT SELECT ON ALL TABLES IN SCHEMA public TO omnidash_readonly;
+            -- Grant SELECT on future tables
+            ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO omnidash_readonly;
+          SQL
+
+          echo "omnidash_readonly role provisioned successfully"
+
+          # Verify: omnidash_readonly has SELECT but NOT INSERT/UPDATE/DELETE
+          # Test using pg_roles and information_schema
+          psql -h localhost -U postgres -d omnidash_analytics <<'SQL'
+            -- Create a test table to verify permissions
+            CREATE TABLE IF NOT EXISTS ci_permission_test (id serial PRIMARY KEY, data text);
+            INSERT INTO ci_permission_test (data) VALUES ('ci_test_row');
+          SQL
+
+          # Verify SELECT works for readonly role
+          PGPASSWORD=readonly_ci_test psql -h localhost -U omnidash_readonly -d omnidash_analytics -c \
+            "SELECT * FROM ci_permission_test;" > /dev/null && echo "SELECT: OK"
+
+          # Verify INSERT is denied for readonly role
+          PGPASSWORD=readonly_ci_test psql -h localhost -U omnidash_readonly -d omnidash_analytics -c \
+            "INSERT INTO ci_permission_test (data) VALUES ('should_fail');" 2>&1 \
+            | grep -q "permission denied" && echo "INSERT denied: OK" \
+            || (echo "FAIL: INSERT should be denied for omnidash_readonly" && exit 1)
+
+          # Verify UPDATE is denied for readonly role
+          PGPASSWORD=readonly_ci_test psql -h localhost -U omnidash_readonly -d omnidash_analytics -c \
+            "UPDATE ci_permission_test SET data = 'should_fail';" 2>&1 \
+            | grep -q "permission denied" && echo "UPDATE denied: OK" \
+            || (echo "FAIL: UPDATE should be denied for omnidash_readonly" && exit 1)
+
+          # Verify DELETE is denied for readonly role
+          PGPASSWORD=readonly_ci_test psql -h localhost -U omnidash_readonly -d omnidash_analytics -c \
+            "DELETE FROM ci_permission_test;" 2>&1 \
+            | grep -q "permission denied" && echo "DELETE denied: OK" \
+            || (echo "FAIL: DELETE should be denied for omnidash_readonly" && exit 1)
+
+          echo "omnidash_readonly role: SELECT-only permissions verified"
+
+          # Verify zero access to omniclaude databases (no CONNECT granted)
+          # omniclaude DB is postgres (default) in this CI environment
+          PGPASSWORD=readonly_ci_test psql -h localhost -U omnidash_readonly -d postgres -c '\q' 2>&1 \
+            | grep -q "permission denied\|FATAL" && echo "omniclaude DB access denied: OK" \
+            || echo "NOTE: omniclaude DB isolation not enforced in this CI environment (honor system)"
+
+          echo "omnidash_readonly DB role CI check PASSED"
+
+  arch-cost-ledger-structure:
+    name: "Arch: ModelCostLedger run_id field + index (check 9)"
+    # OMNINODE_SELF_HOSTED_RUNS_ON_V1 — do not edit inline; update plan + all occurrences together
+    runs-on: >-
+      ${{
+        (vars.USE_SELF_HOSTED_RUNNERS == 'true' &&
+         (github.event_name == 'push' ||
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule'))
+        && fromJSON('["self-hosted","omnibase-ci"]')
+        || fromJSON('["ubuntu-latest"]')
+      }}
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Check ModelCostLedger structure
+        run: python3 scripts/validation/validate_cost_ledger_structure.py
+
+  arch-no-direct-kafka-producer:
+    name: "Arch: No direct Kafka producer outside publisher (check 10)"
+    # OMNINODE_SELF_HOSTED_RUNS_ON_V1 — do not edit inline; update plan + all occurrences together
+    runs-on: >-
+      ${{
+        (vars.USE_SELF_HOSTED_RUNNERS == 'true' &&
+         (github.event_name == 'push' ||
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule'))
+        && fromJSON('["self-hosted","omnibase-ci"]')
+        || fromJSON('["ubuntu-latest"]')
+      }}
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Check no direct Kafka producer usage
+        run: python3 scripts/validation/validate_no_direct_kafka_producer.py
+
+  arch-no-utcnow:
+    name: "Arch: No datetime.utcnow() (check 11)"
+    # OMNINODE_SELF_HOSTED_RUNS_ON_V1 — do not edit inline; update plan + all occurrences together
+    runs-on: >-
+      ${{
+        (vars.USE_SELF_HOSTED_RUNNERS == 'true' &&
+         (github.event_name == 'push' ||
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule'))
+        && fromJSON('["self-hosted","omnibase-ci"]')
+        || fromJSON('["ubuntu-latest"]')
+      }}
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.6.1"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Load cached venv
+        uses: actions/cache@v5
+        with:
+          path: .venv
+          key: uv-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+
+      - name: Install dependencies
+        run: uv sync --frozen --group dev
+
+      - name: Check no datetime.utcnow() usage
+        run: uv run python scripts/validation/validate_no_utcnow.py
+
+  arch-no-hardcoded-ip:
+    name: "Arch: No hardcoded internal IPs (check 12)"
+    # OMNINODE_SELF_HOSTED_RUNS_ON_V1 — do not edit inline; update plan + all occurrences together
+    runs-on: >-
+      ${{
+        (vars.USE_SELF_HOSTED_RUNNERS == 'true' &&
+         (github.event_name == 'push' ||
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule'))
+        && fromJSON('["self-hosted","omnibase-ci"]')
+        || fromJSON('["ubuntu-latest"]')
+      }}
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.6.1"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Load cached venv
+        uses: actions/cache@v5
+        with:
+          path: .venv
+          key: uv-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+
+      - name: Install dependencies
+        run: uv sync --frozen --group dev
+
+      - name: Check no hardcoded internal IPs
+        run: uv run python scripts/validation/validate_no_hardcoded_ip.py
+
+  # ============================================================================
+  # F5 ARCHITECTURAL CHECKS (OMN-2595: Consumer Group Rules)
+  # ============================================================================
+
+  arch-no-compact-cmd-topic:
+    name: F5.1 No compact cmd topic
+    # OMNINODE_SELF_HOSTED_RUNS_ON_V1 — do not edit inline; update plan + all occurrences together
+    runs-on: >-
+      ${{
+        (vars.USE_SELF_HOSTED_RUNNERS == 'true' &&
+         (github.event_name == 'push' ||
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule'))
+        && fromJSON('["self-hosted","omnibase-ci"]')
+        || fromJSON('["ubuntu-latest"]')
+      }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.6.1"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Load cached venv
+        uses: actions/cache@v5
+        with:
+          path: .venv
+          key: uv-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+
+      - name: Install dependencies
+        run: uv sync --frozen --group dev
+
+      - name: F5.1 - Validate no cmd topic uses cleanup.policy=compact
+        run: uv run python scripts/validation/validate_no_compact_cmd_topic.py
+
+  arch-invariants:
+    name: Architecture Invariants
+    # OMNINODE_SELF_HOSTED_RUNS_ON_V2
+    runs-on: >-
+      ${{
+        (vars.USE_SELF_HOSTED_RUNNERS == 'true' &&
+         (github.event_name == 'push' ||
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule' ||
+          contains(vars.SELF_HOSTED_ALWAYS_JOBS || '', ',arch-invariants,')))
+        && fromJSON('["self-hosted","omnibase-ci"]')
+        || fromJSON('["ubuntu-latest"]')
+      }}
+    timeout-minutes: 15
+    steps:
+      - name: Runner sanity check
+        if: "!startsWith(runner.name, 'GitHub Actions')"
+        run: |
+          echo "Runner: ${{ runner.name }}"
+          uv --version
+          python3 --version
+          test -d "$HOME/.cache/uv" && echo "uv cache: present" || echo "::warning::uv cache directory not found"
+
+      - uses: actions/checkout@v6
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.6.1"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Load cached venv (restore-only to avoid post-job upload timeout)
+        uses: actions/cache/restore@v5
+        with:
+          path: .venv
+          key: uv-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+
+      - name: Install dependencies
+        run: uv sync --frozen --group dev
+
+      - name: Check ONEX architectural invariants
+        run: uv run python scripts/check_arch_invariants.py src/
+
+  # ============================================================================
+  # SECURITY CHECKS
+  # ============================================================================
+
+  security-python:
+    name: Python Security Scan
+    # OMNINODE_SELF_HOSTED_RUNS_ON_V1 — do not edit inline; update plan + all occurrences together
+    runs-on: >-
+      ${{
+        (vars.USE_SELF_HOSTED_RUNNERS == 'true' &&
+         (github.event_name == 'push' ||
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule'))
+        && fromJSON('["self-hosted","omnibase-ci"]')
+        || fromJSON('["ubuntu-latest"]')
+      }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.6.1"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Export requirements
+        run: uv pip compile pyproject.toml -o requirements.txt
+
+      - name: Bandit security scan
+        run: |
+          pip install bandit
+          # JSON report (don't fail -- just collect)
+          bandit -r src/ \
+            --exclude .venv/,__pycache__/ \
+            --confidence-level medium --severity-level medium \
+            -f json -o bandit-report.json || true
+          # Text output determines pass/fail
+          bandit -r src/ \
+            --exclude .venv/,__pycache__/ \
+            --confidence-level medium --severity-level medium \
+            -f txt
+
+      - name: Upload Bandit report
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: bandit-security-report
+          path: bandit-report.json
+
+  detect-secrets:
+    name: Secret Detection
+    # OMNINODE_SELF_HOSTED_RUNS_ON_V1 — do not edit inline; update plan + all occurrences together
+    runs-on: >-
+      ${{
+        (vars.USE_SELF_HOSTED_RUNNERS == 'true' &&
+         (github.event_name == 'push' ||
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule'))
+        && fromJSON('["self-hosted","omnibase-ci"]')
+        || fromJSON('["ubuntu-latest"]')
+      }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install detect-secrets
+        run: pip install detect-secrets
+
+      - name: Scan for secrets
+        run: |
+          # Copy baseline so we can detect new findings
+          cp .secrets.baseline .secrets.baseline.bak
+          # Scan updates the baseline in-place with any new secrets
+          detect-secrets scan \
+            --baseline .secrets.baseline \
+            --exclude-files '\.lock$' \
+            --exclude-files '\.env\.example$' \
+            --exclude-files 'bandit-report\.json$' \
+            --exclude-files '^tests/' \
+            --exclude-files 'security-report\.json$'
+          # Compare: detect genuinely new secrets (content-addressed, ignores line shifts).
+          # Using only (file, hashed_secret) as the key prevents false positives when
+          # new CI jobs shift line numbers of existing baseline entries (OMN-2625).
+          NEW_SECRETS=$(python3 -c "
+          import json
+          old = json.load(open('.secrets.baseline.bak'))
+          new = json.load(open('.secrets.baseline'))
+          old_set = {(f, s['hashed_secret'])
+                     for f, secrets in old.get('results', {}).items()
+                     for s in secrets}
+          new_set = {(f, s['hashed_secret'], s['line_number'])
+                     for f, secrets in new.get('results', {}).items()
+                     for s in secrets}
+          diff = [(f, line) for f, h, line in sorted(new_set)
+                  if (f, h) not in old_set]
+          for f, line in diff:
+              print(f'  {f}:{line}')
+          print(f'COUNT:{len(diff)}')
+          ")
+          COUNT=$(echo "$NEW_SECRETS" | grep '^COUNT:' | cut -d: -f2)
+          if [ "$COUNT" -gt 0 ]; then
+            echo "$NEW_SECRETS" | grep -v '^COUNT:'
+            echo "::error::detect-secrets found $COUNT new potential secrets not in baseline"
+            exit 1
+          fi
+          echo "Secret detection completed - no new secrets found"
+
+  # ============================================================================
+  # TEST SUITES
+  # ============================================================================
+
+  test:
+    name: Tests (Split ${{ matrix.group }}/5)
+    # OMNINODE_SELF_HOSTED_RUNS_ON_V1 — do not edit inline; update plan + all occurrences together
+    runs-on: >-
+      ${{
+        (vars.USE_SELF_HOSTED_RUNNERS == 'true' &&
+         (github.event_name == 'push' ||
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule'))
+        && fromJSON('["self-hosted","omnibase-ci"]')
+        || fromJSON('["ubuntu-latest"]')
+      }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [1, 2, 3, 4, 5]
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: test_db
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.6.1"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Load cached venv
+        uses: actions/cache@v5
+        with:
+          path: .venv
+          key: uv-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+
+      - name: Install dependencies
+        run: |
+          uv sync --frozen --group dev
+          uv pip install pytest-split pytest-cov
+
+      - name: Auto-generate skill nodes
+        run: uv run python scripts/generate_skill_node.py --all
+
+      - name: Run tests
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/test_db
+          REDIS_URL: redis://localhost:6379/0
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: 5432
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DATABASE: test_db
+          TEST_PG_DSN: postgresql://test:test@localhost:5432/test_db
+        run: |
+          # Run all tests across both directories, split into 5 groups
+          # Exit code 5 = no tests collected (expected for some splits)
+          set +e
+          uv run pytest -o addopts="" tests/ \
+            --splits 5 \
+            --group ${{ matrix.group }} \
+            -v -m "not integration" \
+            --cov=src/omniclaude \
+            --cov-report=term-missing \
+            --junitxml=junit-test-${{ matrix.group }}.xml
+          EXIT_CODE=$?
+          set -e
+
+          if [ $EXIT_CODE -ne 0 ] && [ $EXIT_CODE -ne 5 ]; then
+            echo "::error::Tests failed with exit code $EXIT_CODE"
+            exit 1
+          fi
+
+          # Rename coverage file to be unique for this group
+          mv .coverage .coverage.${{ matrix.group }} 2>/dev/null || true
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v7
+        if: always()
+        continue-on-error: true
+        with:
+          name: coverage-test-group-${{ matrix.group }}
+          path: .coverage.${{ matrix.group }}
+          retention-days: 1
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v7
+        if: always()
+        continue-on-error: true
+        with:
+          name: test-results-${{ matrix.group }}
+          path: junit-test-${{ matrix.group }}.xml
+
+  hooks-tests:
+    name: Hooks System Tests
+    # OMNINODE_SELF_HOSTED_RUNS_ON_V1 — do not edit inline; update plan + all occurrences together
+    runs-on: >-
+      ${{
+        (vars.USE_SELF_HOSTED_RUNNERS == 'true' &&
+         (github.event_name == 'push' ||
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule'))
+        && fromJSON('["self-hosted","omnibase-ci"]')
+        || fromJSON('["ubuntu-latest"]')
+      }}
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: hooks_test
+          POSTGRES_PASSWORD: hooks_test
+          POSTGRES_DB: hooks_test_db
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.6.1"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Load cached venv
+        uses: actions/cache@v5
+        with:
+          path: .venv
+          key: uv-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+
+      - name: Install dependencies
+        run: uv sync --frozen --group dev
+
+      - name: Initialize hooks database
+        env:
+          POSTGRES_USER: hooks_test
+          POSTGRES_PASSWORD: hooks_test
+          POSTGRES_DB: hooks_test_db
+          PGPASSWORD: hooks_test
+        run: |
+          until psql -h localhost -U hooks_test -d hooks_test_db -c '\q' 2>/dev/null; do
+            echo "Waiting for PostgreSQL..."
+            sleep 2
+          done
+          if [ -f "scripts/init-db.sh" ]; then
+            bash scripts/init-db.sh
+          fi
+
+      - name: Run hooks tests
+        env:
+          DATABASE_URL: postgresql://hooks_test:hooks_test@localhost:5432/hooks_test_db
+          OMNICLAUDE_DB_URL: postgresql://hooks_test:hooks_test@localhost:5432/hooks_test_db
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: 5432
+          POSTGRES_USER: hooks_test
+          POSTGRES_PASSWORD: hooks_test
+          POSTGRES_DATABASE: hooks_test_db
+          SEMANTIC_SEARCH_URL: http://localhost:8055
+        run: |
+          if [ -d "tests/hooks" ] && [ -n "$(find tests/hooks/ -name 'test_*.py' -type f 2>/dev/null)" ]; then
+            uv run pytest tests/hooks/ -v \
+              --cov=src/omniclaude \
+              --cov-report=term-missing \
+              --junitxml=junit-hooks.xml
+          else
+            echo "No hooks tests found in tests/hooks/ -- skipping"
+            echo '<?xml version="1.0" encoding="utf-8"?><testsuites><testsuite name="hooks" tests="0" errors="0" failures="0" skipped="0"></testsuite></testsuites>' > junit-hooks.xml
+          fi
+
+      - name: Upload hooks test results
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: hooks-test-results
+          path: junit-hooks.xml
+
+  agent-framework-tests:
+    name: Agent Framework Tests
+    # OMNINODE_SELF_HOSTED_RUNS_ON_V1 — do not edit inline; update plan + all occurrences together
+    runs-on: >-
+      ${{
+        (vars.USE_SELF_HOSTED_RUNNERS == 'true' &&
+         (github.event_name == 'push' ||
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule'))
+        && fromJSON('["self-hosted","omnibase-ci"]')
+        || fromJSON('["ubuntu-latest"]')
+      }}
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.6.1"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Load cached venv
+        uses: actions/cache@v5
+        with:
+          path: .venv
+          key: uv-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+
+      - name: Install dependencies
+        run: uv sync --frozen --group dev
+
+      - name: Run agent framework tests
+        run: |
+          AGENT_TESTS=""
+          for test_file in tests/test_enhanced_router.py tests/test_quality_gates.py tests/test_performance_thresholds.py; do
+            if [ -f "$test_file" ]; then
+              AGENT_TESTS="$AGENT_TESTS $test_file"
+            fi
+          done
+          if [ -n "$AGENT_TESTS" ]; then
+            uv run pytest $AGENT_TESTS -v \
+              --cov=src/omniclaude \
+              --cov-report=term-missing \
+              --junitxml=junit-agent-framework.xml
+          else
+            echo "No agent framework tests found -- skipping"
+            echo '<?xml version="1.0" encoding="utf-8"?><testsuites><testsuite name="agent-framework" tests="0" errors="0" failures="0" skipped="0"></testsuite></testsuites>' > junit-agent-framework.xml
+          fi
+
+      - name: Upload agent framework test results
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: agent-framework-test-results
+          path: junit-agent-framework.xml
+
+  database-validation:
+    name: Database Schema Validation
+    # OMNINODE_SELF_HOSTED_RUNS_ON_V1 — do not edit inline; update plan + all occurrences together
+    runs-on: >-
+      ${{
+        (vars.USE_SELF_HOSTED_RUNNERS == 'true' &&
+         (github.event_name == 'push' ||
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule'))
+        && fromJSON('["self-hosted","omnibase-ci"]')
+        || fromJSON('["ubuntu-latest"]')
+      }}
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: schema_test
+          POSTGRES_PASSWORD: schema_test
+          POSTGRES_DB: schema_test_db
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Validate database schema
+        env:
+          PGPASSWORD: schema_test
+          POSTGRES_USER: schema_test
+          POSTGRES_DB: schema_test_db
+        run: |
+          until psql -h localhost -U schema_test -d schema_test_db -c '\q' 2>/dev/null; do
+            echo "Waiting for PostgreSQL..."
+            sleep 2
+          done
+          bash scripts/init-db.sh
+
+          echo "Validating schema_migrations table..."
+          psql -h localhost -U schema_test -d schema_test_db -c '\d schema_migrations'
+
+          echo "Validating claude_session_snapshots table..."
+          psql -h localhost -U schema_test -d schema_test_db -c '\d claude_session_snapshots'
+
+          echo "Validating claude_session_prompts table..."
+          psql -h localhost -U schema_test -d schema_test_db -c '\d claude_session_prompts'
+
+          echo "Validating claude_session_tools table..."
+          psql -h localhost -U schema_test -d schema_test_db -c '\d claude_session_tools'
+
+          echo "Validating indexes..."
+          psql -h localhost -U schema_test -d schema_test_db -c '\di'
+
+          echo "Database schema validation passed"
+
+  # ============================================================================
+  # DOD EVIDENCE VALIDATION (OMN-6747) — hard mode (OMN-6117)
+  # ============================================================================
+
+  dod-evidence-check:
+    name: DoD Evidence Check
+    # Self-hosted runner only — hard gate: missing DoD evidence blocks merge
+    runs-on: >-
+      ${{
+        (vars.USE_SELF_HOSTED_RUNNERS == 'true' &&
+         (github.event_name == 'push' ||
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule'))
+        && fromJSON('["self-hosted","omnibase-ci"]')
+        || fromJSON('["ubuntu-latest"]')
+      }}
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Run DoD evidence check
+        # Advisory until CI can generate DoD evidence (evidence files are local
+        # artifacts not committed to the repo). Hard mode blocks every PR that
+        # has a ticket ID in the branch name. Tracked: OMN-6117.
+        run: bash scripts/dod-pre-push-check.sh
+        env:
+          DOD_ENFORCEMENT: advisory
+
+  # ============================================================================
+  # COVERAGE (runs after test matrix)
+  # ============================================================================
+
+  merge-coverage:
+    name: Merge Test Coverage
+    # OMNINODE_SELF_HOSTED_RUNS_ON_V1 — do not edit inline; update plan + all occurrences together
+    runs-on: >-
+      ${{
+        (vars.USE_SELF_HOSTED_RUNNERS == 'true' &&
+         (github.event_name == 'push' ||
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule'))
+        && fromJSON('["self-hosted","omnibase-ci"]')
+        || fromJSON('["ubuntu-latest"]')
+      }}
+    needs: test
+    if: needs.test.result == 'success'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install coverage
+        run: pip install coverage[toml]
+
+      - name: Download all coverage artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: coverage-test-group-*
+          path: coverage-files/
+
+      - name: Combine coverage
+        run: |
+          if [ ! -d "coverage-files" ]; then
+            echo "No coverage files directory found"
+            exit 0
+          fi
+
+          COVERAGE_COUNT=$(find coverage-files/ -name '.coverage.*' 2>/dev/null | wc -l)
+          echo "Found $COVERAGE_COUNT coverage files"
+
+          if [ "$COVERAGE_COUNT" -eq 0 ]; then
+            echo "No coverage files to combine"
+            exit 0
+          fi
+
+          find coverage-files/ -name '.coverage.*' -exec mv {} . \;
+          coverage combine .coverage.*
+          coverage xml -o coverage.xml
+          coverage report
+
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v6
+        with:
+          files: ./coverage.xml
+          flags: unittests
+          name: codecov-umbrella
+          fail_ci_if_error: false
+
+      - name: Upload merged coverage artifact
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: coverage-merged
+          path: |
+            coverage.xml
+            .coverage
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # Skill Hygiene Check (OMN-5200)
+  # ---------------------------------------------------------------------------
+  # Validates skill directory naming, structure, and Python separation using the
+  # cross-repo validator in onex_change_control.
+  # ---------------------------------------------------------------------------
+  # Mode Metadata Integrity (OMN-5402)
+  # ---------------------------------------------------------------------------
+  mode-metadata-guard:
+    name: Mode Metadata Integrity
+    # OMNINODE_SELF_HOSTED_RUNS_ON_V1 — do not edit inline; update plan + all occurrences together
+    runs-on: >-
+      ${{
+        (vars.USE_SELF_HOSTED_RUNNERS == 'true' &&
+         (github.event_name == 'push' ||
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule'))
+        && fromJSON('["self-hosted","omnibase-ci"]')
+        || fromJSON('["ubuntu-latest"]')
+      }}
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.6.1"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Load cached venv
+        uses: actions/cache@v5
+        with:
+          path: .venv
+          key: uv-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      - name: Validate mode metadata integrity
+        run: uv run pytest tests/unit/test_mode_metadata_integrity.py -v
+
+  skill-hygiene:
+    name: Skill Hygiene
+    # OMNINODE_SELF_HOSTED_RUNS_ON_V1 — do not edit inline; update plan + all occurrences together
+    runs-on: >-
+      ${{
+        (vars.USE_SELF_HOSTED_RUNNERS == 'true' &&
+         (github.event_name == 'push' ||
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule'))
+        && fromJSON('["self-hosted","omnibase-ci"]')
+        || fromJSON('["ubuntu-latest"]')
+      }}
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Checkout onex_change_control validator
+        uses: actions/checkout@v6
+        with:
+          repository: OmniNode-ai/onex_change_control
+          ref: 1b0d2f0374bca1f39d9bab22a02251208cdce196  # pragma: allowlist secret
+          token: ${{ secrets.CROSS_REPO_PAT || github.token }}
+          path: onex_change_control
+          sparse-checkout: |
+            scripts/validation/
+          sparse-checkout-cone-mode: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Validate skill hygiene
+        run: python onex_change_control/scripts/validation/validate_skill_hygiene.py --skills-root plugins/onex/skills --strict
+
+  # ---------------------------------------------------------------------------
+  # Version Pin Compliance Check (OMN-4810)
+  # ---------------------------------------------------------------------------
+  # Verifies that this repo's dependency pins are compliant with the shared
+  # version matrix defined in onex_change_control/standards/version-matrix.yaml.
+  version-pin-check:
+    name: Version Pin Compliance
+    # OMNINODE_SELF_HOSTED_RUNS_ON_V1 — do not edit inline; update plan + all occurrences together
+    runs-on: >-
+      ${{
+        (vars.USE_SELF_HOSTED_RUNNERS == 'true' &&
+         (github.event_name == 'push' ||
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule'))
+        && fromJSON('["self-hosted","omnibase-ci"]')
+        || fromJSON('["ubuntu-latest"]')
+      }}
+    timeout-minutes: 5
+    # Advisory until range pin support (OMN-5132) and matrix alignment land
+    continue-on-error: true
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Checkout onex_change_control standards
+        uses: actions/checkout@v6
+        with:
+          repository: OmniNode-ai/onex_change_control
+          ref: 1b0d2f0374bca1f39d9bab22a02251208cdce196  # pragma: allowlist secret
+          token: ${{ secrets.CROSS_REPO_PAT || github.token }}
+          path: onex_change_control
+          sparse-checkout: |
+            standards/
+          sparse-checkout-cone-mode: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: pip install pyyaml packaging
+
+      - name: Check version pin compliance
+        run: python onex_change_control/standards/check_version_pins.py --repo omniclaude --root onex_change_control --repo-path .
+
+  # ---------------------------------------------------------------------------
+  # Merge-Sweep Contract Tests (OMN-6189)
+  # ---------------------------------------------------------------------------
+  # Structural regression tests for the merge-sweep skill prompt contract.
+  # Prevents Track B dispatch bugs (e.g., --skip-polish leaking into empty check).
+  merge-sweep-contract:
+    name: Merge-Sweep Contract
+    # OMNINODE_SELF_HOSTED_RUNS_ON_V1 — do not edit inline; update plan + all occurrences together
+    runs-on: >-
+      ${{
+        (vars.USE_SELF_HOSTED_RUNNERS == 'true' &&
+         (github.event_name == 'push' ||
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule'))
+        && fromJSON('["self-hosted","omnibase-ci"]')
+        || fromJSON('["ubuntu-latest"]')
+      }}
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.6.1"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Load cached venv
+        uses: actions/cache@v5
+        with:
+          path: .venv
+          key: uv-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+
+      - name: Install dependencies
+        run: uv sync --frozen --group dev
+
+      - name: Run merge-sweep contract tests
+        run: uv run pytest tests/integration/skills/merge_sweep/ -v -m "unit and not integration"
+
+  # ---------------------------------------------------------------------------
+  # Skill Contract Validation (OMN-6193)
+  # ---------------------------------------------------------------------------
+  # Validates argument parity, sub-skill references, duplicate frontmatter,
+  # and spec-prompt predicate coverage across all skills.
+  skill-contract-validation:
+    name: Skill Contract Validation
+    # OMNINODE_SELF_HOSTED_RUNS_ON_V1 — do not edit inline; update plan + all occurrences together
+    runs-on: >-
+      ${{
+        (vars.USE_SELF_HOSTED_RUNNERS == 'true' &&
+         (github.event_name == 'push' ||
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule'))
+        && fromJSON('["self-hosted","omnibase-ci"]')
+        || fromJSON('["ubuntu-latest"]')
+      }}
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Checkout onex_change_control validator
+        uses: actions/checkout@v6
+        with:
+          repository: OmniNode-ai/onex_change_control
+          ref: main
+          token: ${{ secrets.CROSS_REPO_PAT || github.token }}
+          path: onex_change_control
+          sparse-checkout: |
+            scripts/validation/
+          sparse-checkout-cone-mode: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Validate skill contracts
+        # Initially without --strict; promote to --strict after baseline warnings are resolved
+        run: python onex_change_control/scripts/validation/validate_skill_contracts.py --skills-root plugins/onex/skills
+
+  # ============================================================================
+  # ONEX Compliance Check
+  # Runs `onex compliance check` to validate contracts, handlers, and schemas.
+  # External-service checks WARN only (not FAIL) — structural failures remain FAIL.
+  # Conditional: only runs if the `onex compliance` command is available.
+  # ============================================================================
+  compliance:
+    name: Contract Compliance
+    # OMNINODE_SELF_HOSTED_RUNS_ON_V1 — do not edit inline; update plan + all occurrences together
+    runs-on: >-
+      ${{
+        (vars.USE_SELF_HOSTED_RUNNERS == 'true' &&
+         (github.event_name == 'push' ||
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule'))
+        && fromJSON('["self-hosted","omnibase-ci"]')
+        || fromJSON('["ubuntu-latest"]')
+      }}
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.6.1"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: uv sync --frozen --group dev
+
+      - name: Check if onex compliance command exists
+        id: check-command
+        run: |
+          if uv run onex compliance check --help >/dev/null 2>&1; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::onex compliance check command not available yet — skipping"
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run onex compliance check
+        id: compliance
+        if: steps.check-command.outputs.available == 'true'
+        run: |
+          mkdir -p .onex_state/compliance
+          if uv run onex compliance check --repo-root . --output .onex_state/compliance/report.yaml; then
+            echo "result=pass" >> "$GITHUB_OUTPUT"
+          else
+            echo "result=fail" >> "$GITHUB_OUTPUT"
+            echo "::warning::ONEX compliance check reported failures (warn-only for external-service checks)"
+          fi
+
+      - name: Upload compliance report
+        if: always() && steps.check-command.outputs.available == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: compliance-report
+          path: .onex_state/compliance/report.yaml
+          retention-days: 30
+
+  # ============================================================================
+  # GATE AGGREGATORS
+  # Gate names are API-stable per CI/CD Standards (Invariant 1).
+  # Do NOT rename without following the Branch Protection Migration Safety
+  # procedure in docs/standards/CI_CD_STANDARDS.md.
+  # ============================================================================
+
+  quality-gate:
+    name: Quality Gate
+    # OMNINODE_SELF_HOSTED_RUNS_ON_V1 — do not edit inline; update plan + all occurrences together
+    runs-on: >-
+      ${{
+        (vars.USE_SELF_HOSTED_RUNNERS == 'true' &&
+         (github.event_name == 'push' ||
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule'))
+        && fromJSON('["self-hosted","omnibase-ci"]')
+        || fromJSON('["ubuntu-latest"]')
+      }}
+    needs:
+      - quality
+      - pyright
+      - check-handshake
+      - enum-governance
+      - exports-validation
+      - env-var-registry
+      - cross-repo-validation
+      - migration-freeze
+      - onex-validation
+      # Architecture enforcement gates (OMN-2592)
+      - arch-no-db-in-orchestrator
+      - arch-no-git-outside-effects
+      - arch-no-linear-outside-effects
+      - arch-no-repo-adapter-in-orchestrator
+      - arch-cost-ledger-isolation
+      - arch-topic-naming
+      - arch-omnidash-db-role
+      - arch-cost-ledger-structure
+      - arch-no-direct-kafka-producer
+      - arch-no-utcnow
+      - arch-no-hardcoded-ip
+      # F5 checks (OMN-2595)
+      - arch-no-compact-cmd-topic
+      # CDQA-07 (OMN-2977)
+      - arch-invariants
+      # Version pin compliance (OMN-4810)
+      - version-pin-check
+      # Skill hygiene (OMN-5200)
+      - skill-hygiene
+      # Mode metadata integrity (OMN-5402)
+      - mode-metadata-guard
+      # Merge-sweep contract (OMN-6189)
+      - merge-sweep-contract
+      # Skill contract validation (OMN-6193)
+      - skill-contract-validation
+    if: always()
+    steps:
+      - name: Check quality results
+        run: |
+          echo "=== Quality Gate ==="
+          FAILED=false
+
+          for check in \
+            "quality=${{ needs.quality.result }}" \
+            "pyright=${{ needs.pyright.result }}" \
+            "check-handshake=${{ needs.check-handshake.result }}" \
+            "enum-governance=${{ needs.enum-governance.result }}" \
+            "exports-validation=${{ needs.exports-validation.result }}" \
+            "env-var-registry=${{ needs.env-var-registry.result }}" \
+            "cross-repo-validation=${{ needs.cross-repo-validation.result }}" \
+            "migration-freeze=${{ needs.migration-freeze.result }}" \
+            "onex-validation=${{ needs.onex-validation.result }}" \
+            "arch-no-db-in-orchestrator=${{ needs.arch-no-db-in-orchestrator.result }}" \
+            "arch-no-git-outside-effects=${{ needs.arch-no-git-outside-effects.result }}" \
+            "arch-no-linear-outside-effects=${{ needs.arch-no-linear-outside-effects.result }}" \
+            "arch-no-repo-adapter-in-orchestrator=${{ needs.arch-no-repo-adapter-in-orchestrator.result }}" \
+            "arch-cost-ledger-isolation=${{ needs.arch-cost-ledger-isolation.result }}" \
+            "arch-topic-naming=${{ needs.arch-topic-naming.result }}" \
+            "arch-omnidash-db-role=${{ needs.arch-omnidash-db-role.result }}" \
+            "arch-cost-ledger-structure=${{ needs.arch-cost-ledger-structure.result }}" \
+            "arch-no-direct-kafka-producer=${{ needs.arch-no-direct-kafka-producer.result }}" \
+            "arch-no-utcnow=${{ needs.arch-no-utcnow.result }}" \
+            "arch-no-hardcoded-ip=${{ needs.arch-no-hardcoded-ip.result }}" \
+            "arch-no-compact-cmd-topic=${{ needs.arch-no-compact-cmd-topic.result }}" \
+            "arch-invariants=${{ needs.arch-invariants.result }}" \
+            "version-pin-check=${{ needs.version-pin-check.result }}" \
+            "skill-hygiene=${{ needs.skill-hygiene.result }}" \
+            "mode-metadata-guard=${{ needs.mode-metadata-guard.result }}" \
+            "merge-sweep-contract=${{ needs.merge-sweep-contract.result }}" \
+            "skill-contract-validation=${{ needs.skill-contract-validation.result }}"; do
+            NAME="${check%%=*}"
+            RESULT="${check##*=}"
+            if [ "$RESULT" != "success" ] && [ "$RESULT" != "skipped" ]; then
+              echo "::error::$NAME failed (result: $RESULT)"
+              FAILED=true
+            else
+              echo "$NAME: $RESULT"
+            fi
+          done
+
+          if [ "$FAILED" = "true" ]; then
+            echo ""
+            echo "Quality Gate FAILED"
+            exit 1
+          fi
+          echo ""
+          echo "Quality Gate PASSED"
+
+  tests-gate:
+    name: Tests Gate
+    # OMNINODE_SELF_HOSTED_RUNS_ON_V1 — do not edit inline; update plan + all occurrences together
+    runs-on: >-
+      ${{
+        (vars.USE_SELF_HOSTED_RUNNERS == 'true' &&
+         (github.event_name == 'push' ||
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule'))
+        && fromJSON('["self-hosted","omnibase-ci"]')
+        || fromJSON('["ubuntu-latest"]')
+      }}
+    needs:
+      - test
+      - hooks-tests
+      - agent-framework-tests
+      - database-validation
+    if: always()
+    steps:
+      - name: Check test results
+        run: |
+          echo "=== Tests Gate ==="
+          FAILED=false
+
+          for check in \
+            "test=${{ needs.test.result }}" \
+            "hooks-tests=${{ needs.hooks-tests.result }}" \
+            "agent-framework-tests=${{ needs.agent-framework-tests.result }}" \
+            "database-validation=${{ needs.database-validation.result }}"; do
+            NAME="${check%%=*}"
+            RESULT="${check##*=}"
+            if [ "$RESULT" != "success" ] && [ "$RESULT" != "skipped" ]; then
+              echo "::error::$NAME failed (result: $RESULT)"
+              FAILED=true
+            else
+              echo "$NAME: $RESULT"
+            fi
+          done
+
+          if [ "$FAILED" = "true" ]; then
+            echo ""
+            echo "Tests Gate FAILED"
+            exit 1
+          fi
+          echo ""
+          echo "Tests Gate PASSED"
+
+  security-gate:
+    name: Security Gate
+    # OMNINODE_SELF_HOSTED_RUNS_ON_V1 — do not edit inline; update plan + all occurrences together
+    runs-on: >-
+      ${{
+        (vars.USE_SELF_HOSTED_RUNNERS == 'true' &&
+         (github.event_name == 'push' ||
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule'))
+        && fromJSON('["self-hosted","omnibase-ci"]')
+        || fromJSON('["ubuntu-latest"]')
+      }}
+    needs:
+      - security-python
+      - detect-secrets
+    if: always()
+    steps:
+      - name: Check security results
+        run: |
+          echo "=== Security Gate ==="
+          FAILED=false
+
+          for check in \
+            "security-python=${{ needs.security-python.result }}" \
+            "detect-secrets=${{ needs.detect-secrets.result }}"; do
+            NAME="${check%%=*}"
+            RESULT="${check##*=}"
+            if [ "$RESULT" != "success" ] && [ "$RESULT" != "skipped" ]; then
+              echo "::error::$NAME failed (result: $RESULT)"
+              FAILED=true
+            else
+              echo "$NAME: $RESULT"
+            fi
+          done
+
+          if [ "$FAILED" = "true" ]; then
+            echo ""
+            echo "Security Gate FAILED"
+            exit 1
+          fi
+          echo ""
+          echo "Security Gate PASSED"
+
+  # ============================================================================
+  # CROSS-REPO BOUNDARY PARITY (OMN-5771)
+  # Validates Kafka topic boundaries against onex_change_control manifest.
+  # warn-only until all violations fixed (see OMN-5775).
+  # ============================================================================
+
+  boundary-parity:
+    name: Cross-Repo Boundary Parity
+    runs-on: ubuntu-latest
+    # Only run when seam-relevant files change
+    if: >-
+      github.event_name == 'merge_group' ||
+      github.event_name == 'push' ||
+      contains(github.event.pull_request.changed_files || '0', '0') == false
+    continue-on-error: true
+    steps:
+      - uses: OmniNode-ai/onex_change_control/.github/actions/validate-boundaries@main
+        with:
+          checks: "boundary-parity"
+          warn-only: "true"
+
+  # ============================================================================
+  # CI SUMMARY (OMN-4501) — single branch-protection check
+  # Aggregates quality-gate, tests-gate, security-gate into one status context.
+  # build is excluded: it is post-gate artifact packaging, not a gating requirement.
+  # ============================================================================
+
+  ci-summary:
+    name: CI Summary
+    runs-on: ubuntu-latest
+    needs: [quality-gate, tests-gate, security-gate, compliance]
+    if: always()
+    steps:
+      - name: Check all jobs passed
+        run: |
+          quality="${{ needs.quality-gate.result }}"
+          tests="${{ needs.tests-gate.result }}"
+          security="${{ needs.security-gate.result }}"
+          compliance="${{ needs.compliance.result }}"
+
+          FAILED=false
+          for result in "$quality" "$tests" "$security"; do
+            if [[ "$result" == "failure" || "$result" == "cancelled" ]]; then
+              FAILED=true
+            fi
+          done
+
+          # Compliance: accept success or skipped (command may not exist yet)
+          if [[ "$compliance" == "failure" || "$compliance" == "cancelled" ]]; then
+            FAILED=true
+          fi
+
+          if [[ "$FAILED" == "true" ]]; then
+            echo "One or more required jobs failed or were cancelled"
+            echo "  Quality Gate: $quality"
+            echo "  Tests Gate: $tests"
+            echo "  Security Gate: $security"
+            echo "  Compliance: $compliance"
+            exit 1
+          fi
+          echo "All required jobs passed"
+
+  # ============================================================================
+  # BUILD (downstream of all gates)
+  # On PRs and merge_group: build-only validation (no push, no Trivy scan)
+  # On push to main: full build + push to GHCR + Trivy vulnerability scan
+  # ============================================================================
+
+  build:
+    name: Build Docker Image
+    # OMNINODE_SELF_HOSTED_DOCKER_V1 — self-hosted for push/dispatch/schedule; ubuntu-latest for PRs
+    # NOTE: self-hosted runners lack Docker socket access, so PR builds must use ubuntu-latest
+    runs-on: >-
+      ${{
+        (vars.USE_SELF_HOSTED_RUNNERS == 'true' &&
+         (github.event_name == 'push' ||
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule'))
+        && fromJSON('["self-hosted","omnibase-ci"]')
+        || fromJSON('["ubuntu-latest"]')
+      }}
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    timeout-minutes: 30
+    needs: [quality-gate, tests-gate, security-gate]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to Container Registry
+        if: github.event_name != 'pull_request' && github.event_name != 'merge_group'
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./deployment/Dockerfile
+          push: ${{ github.event_name != 'pull_request' && github.event_name != 'merge_group' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            BUILD_DATE=${{ steps.meta.outputs.created }}
+            VCS_REF=${{ github.sha }}
+            VERSION=${{ steps.meta.outputs.version }}
+
+      - name: Set lowercase image name
+        id: image-name
+        run: echo "name=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+
+      - name: Export image for scanning
+        if: github.event_name != 'pull_request' && github.event_name != 'merge_group'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./deployment/Dockerfile
+          load: true
+          tags: ${{ steps.image-name.outputs.name }}:scan
+
+      - name: Trivy vulnerability scanner (SARIF)
+        if: github.event_name != 'pull_request' && github.event_name != 'merge_group'
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # v0.34.2 (pinned 2026-03-04)
+        with:
+          image-ref: ${{ steps.image-name.outputs.name }}:scan
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+          ignore-unfixed: true
+
+      - name: Upload Trivy results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v4
+        if: github.event_name != 'pull_request' && github.event_name != 'merge_group'
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+      - name: Trivy vulnerability scanner (table)
+        if: github.event_name != 'pull_request' && github.event_name != 'merge_group'
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # v0.34.2 (pinned 2026-03-04)
+        with:
+          image-ref: ${{ steps.image-name.outputs.name }}:scan
+          format: 'table'
+          severity: 'CRITICAL,HIGH'
+          ignore-unfixed: true
+
+  # ============================================================================
+  # DEPLOYMENT
+  # ============================================================================
+
+  deploy-staging:
+    name: Deploy to Staging
+    # OMNINODE_SELF_HOSTED_RUNS_ON_V1 — do not edit inline; update plan + all occurrences together
+    runs-on: >-
+      ${{
+        (vars.USE_SELF_HOSTED_RUNNERS == 'true' &&
+         (github.event_name == 'push' ||
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule'))
+        && fromJSON('["self-hosted","omnibase-ci"]')
+        || fromJSON('["ubuntu-latest"]')
+      }}
+    needs: build
+    if: github.ref == 'refs/heads/develop' && github.event_name == 'push'
+    environment:
+      name: staging
+      url: https://staging.omniclaude.example.com
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Deploy to staging
+        run: echo "Deploying to staging environment..."
+
+  deploy-production:
+    name: Deploy to Production
+    # OMNINODE_SELF_HOSTED_RUNS_ON_V1 — do not edit inline; update plan + all occurrences together
+    runs-on: >-
+      ${{
+        (vars.USE_SELF_HOSTED_RUNNERS == 'true' &&
+         (github.event_name == 'push' ||
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule'))
+        && fromJSON('["self-hosted","omnibase-ci"]')
+        || fromJSON('["ubuntu-latest"]')
+      }}
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment:
+      name: production
+      url: https://omniclaude.example.com
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Deploy to production
+        run: echo "Deploying to production environment..."
+
+  ai-slop-check:
+    name: AI-Slop Pattern Check (strict, PR diff)
+    # OMNINODE_SELF_HOSTED_RUNS_ON_V1 — do not edit inline; update plan + all occurrences together
+    runs-on: >-
+      ${{
+        (vars.USE_SELF_HOSTED_RUNNERS == 'true' &&
+         (github.event_name == 'push' ||
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule'))
+        && fromJSON('["self-hosted","omnibase-ci"]')
+        || fromJSON('["ubuntu-latest"]')
+      }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Compute changed Python/Markdown files vs PR base
+        id: changed
+        run: |
+          if [ -n "${{ github.base_ref }}" ]; then
+            git fetch origin "${{ github.base_ref }}" --no-tags --depth=1
+            FILES=$(git diff --name-only "origin/${{ github.base_ref }}"...HEAD -- '*.py' '*.md' | tr '\n' ' ')
+          else
+            FILES=$(git diff --name-only HEAD~1 -- '*.py' '*.md' 2>/dev/null | tr '\n' ' ')
+          fi
+          echo "files=$FILES" >> "$GITHUB_OUTPUT"
+      - name: Check changed files for AI-slop patterns (strict)
+        run: |
+          FILES="${{ steps.changed.outputs.files }}"
+          if [ -z "$FILES" ]; then exit 0; fi
+          python scripts/validation/check_ai_slop.py --strict $FILES

@@ -1,0 +1,55 @@
+# SPDX-FileCopyrightText: 2025 OmniNode.ai Inc.
+# SPDX-License-Identifier: MIT
+
+# Copyright (c) 2026 OmniNode Team
+#
+# ONEX Node Contract
+# Node: NodeSkillMergeSweepOrchestrator
+# Skill: merge-sweep
+# Created: 2026-03-31
+
+# Contract identifiers
+name: node_skill_merge_sweep_orchestrator
+contract_name: node_skill_merge_sweep_orchestrator
+node_name: node_skill_merge_sweep_orchestrator
+
+contract_version:
+  major: 1
+  minor: 0
+  patch: 0
+
+node_version:
+  major: 1
+  minor: 0
+  patch: 0
+
+# Node type
+node_type: ORCHESTRATOR_GENERIC
+
+# Description
+description: >
+  Orchestrator node for the Gemini-native merge-sweep skill.
+  Scans all repos for PRs and manages auto-merge/polish tracks.
+
+# Strongly typed I/O models
+input_model:
+  name: ModelSkillRequest
+  module: omnigemini.shared.models
+
+output_model:
+  name: ModelSkillResult
+  module: omnigemini.shared.models
+
+# Execution backend configuration
+# Dynamic Topic Registration (OMN-1588)
+yaml_consumed_events:
+  - "onex.evt.omnigemini.skill-requested.v1"
+
+yaml_published_events:
+  - topic: "onex.evt.omnigemini.skill-started.v1"
+    event_type: ModelSkillStarted
+  - topic: "onex.evt.omnigemini.skill-completed.v1"
+    event_type: ModelSkillCompleted
+
+execution:
+  backend: gemini_cli

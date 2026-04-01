@@ -1,0 +1,27 @@
+# SPDX-FileCopyrightText: 2025 OmniNode.ai Inc.
+# SPDX-License-Identifier: MIT
+
+# ONEX Node Contract
+# Node: NodeRegistryApiEffect
+# Created: 2026-03-31
+
+name: node_registry_api_effect
+contract_name: node_registry_api_effect
+node_name: node_registry_api_effect
+
+contract_version: {major: 1, minor: 0, patch: 0}
+node_version: {major: 1, minor: 0, patch: 0}
+
+node_type: EFFECT
+
+description: >
+  Dynamic registry and topic registration node. Performs project-wide
+  contract discovery and registers topics into the ONEX registry at runtime.
+
+# Strongly typed I/O models
+input_model: {name: ModelRegistryRequest, module: omnigemini.nodes.node_registry_api_effect.models}
+output_model: {name: ModelRegistryResult, module: omnigemini.nodes.node_registry_api_effect.models}
+
+# Execution
+execution:
+  backend: python

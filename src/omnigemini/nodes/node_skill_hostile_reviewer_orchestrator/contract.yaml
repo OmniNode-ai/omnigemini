@@ -1,0 +1,22 @@
+# SPDX-FileCopyrightText: 2025 OmniNode.ai Inc.
+# SPDX-License-Identifier: MIT
+name: node_skill_hostile_reviewer_orchestrator
+contract_name: node_skill_hostile_reviewer_orchestrator
+node_name: node_skill_hostile_reviewer_orchestrator
+contract_version: {major: 1, minor: 0, patch: 0}
+node_version: {major: 1, minor: 0, patch: 0}
+node_type: ORCHESTRATOR_GENERIC
+description: Orchestrator node for the Gemini-native hostile_reviewer skill.
+input_model: {name: ModelSkillRequest, module: omnigemini.shared.models}
+output_model: {name: ModelSkillResult, module: omnigemini.shared.models}
+# Dynamic Topic Registration (OMN-1588)
+yaml_consumed_events:
+  - "onex.evt.omnigemini.skill-requested.v1"
+
+yaml_published_events:
+  - topic: "onex.evt.omnigemini.skill-started.v1"
+    event_type: ModelSkillStarted
+  - topic: "onex.evt.omnigemini.skill-completed.v1"
+    event_type: ModelSkillCompleted
+
+execution: {backend: gemini_cli}

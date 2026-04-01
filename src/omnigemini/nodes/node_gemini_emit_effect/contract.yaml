@@ -1,0 +1,35 @@
+# SPDX-FileCopyrightText: 2025 OmniNode.ai Inc.
+# SPDX-License-Identifier: MIT
+
+# Copyright (c) 2026 OmniNode Team
+#
+# ONEX Node Contract
+# Node: NodeGeminiEmitEffect
+# Created: 2026-03-31
+
+# Contract identifiers
+name: node_gemini_emit_effect
+contract_name: node_gemini_emit_effect
+node_name: node_gemini_emit_effect
+
+contract_version:
+  major: 1
+  minor: 0
+  patch: 0
+
+node_version:
+  major: 1
+  minor: 0
+  patch: 0
+
+# Node type
+node_type: EFFECT
+
+# Description
+description: >
+  Gemini-native event emission node. Handles Kafka publishing for all
+  OmniGemini lifecycle and skill events.
+
+# Execution
+execution:
+  backend: python

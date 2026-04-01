@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: 2025 OmniNode.ai Inc.
+# SPDX-License-Identifier: MIT
+name: node_skill_autopilot_orchestrator
+contract_name: node_skill_autopilot_orchestrator
+node_name: node_skill_autopilot_orchestrator
+contract_version: {major: 1, minor: 0, patch: 0}
+node_version: {major: 1, minor: 0, patch: 0}
+node_type: ORCHESTRATOR_GENERIC
+description: Orchestrator node for the Gemini-native autopilot skill.
+input_model: {name: ModelSkillRequest, module: omnigemini.shared.models}
+output_model: {name: ModelSkillResult, module: omnigemini.shared.models}
+execution: {backend: gemini_cli}

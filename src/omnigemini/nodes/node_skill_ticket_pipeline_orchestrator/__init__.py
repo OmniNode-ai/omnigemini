@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: 2025 OmniNode.ai Inc.
+# SPDX-License-Identifier: MIT
+"""Skill node: ticket_pipeline orchestrator."""
+
+from omnigemini.nodes.node_skill_ticket_pipeline_orchestrator.node import (
+    NodeSkillTicketPipelineOrchestrator,
+)
+
+__all__ = ["NodeSkillTicketPipelineOrchestrator"]
