@@ -2,7 +2,6 @@
 
 Gemini-native ONEX skill execution runtime — leverages Google Gemini's 2M+ token context window to run platform skills with whole-project grounding.
 
-[![CI](https://github.com/OmniNode-ai/omnigemini/actions/workflows/ci.yml/badge.svg)](https://github.com/OmniNode-ai/omnigemini/actions/workflows/ci.yml)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -48,22 +47,9 @@ Key responsibilities:
 
 ---
 
-## Quickstart
+## Development Status
 
-```bash
-# Install dependencies
-uv sync --all-groups
-
-# Run all tests
-uv run pytest tests/ -v
-
-# Type-check
-uv run mypy src/ --strict
-
-# Lint and format
-uv run ruff check src/ tests/
-uv run ruff format src/ tests/
-```
+This repo currently ships skill prompt definitions (`skills/*/SKILL.md`) and node scaffolding (`src/omnigemini/nodes/*`) only. There is no `pyproject.toml`, `tests/` directory, `.pre-commit-config.yaml`, or CI workflow in this repo yet, so the `uv sync` / `pytest` / `mypy` / `ruff` workflow used in other OmniNode repos is not wired here — there is no local command to run against this repo today. Node handlers import from `omnibase_core` / `omnibase_infra`, whose own packaging and test suites cover that code; this repo's own packaging is not yet built.
 
 ---
 

@@ -78,33 +78,14 @@ Never hardcode connection strings. Read all config from `KAFKA_BOOTSTRAP_SERVERS
 
 ## Development Commands
 
-```bash
-# Install
-uv sync --all-groups
-
-# Tests (always full suite, no -k filter)
-uv run pytest tests/ -v
-
-# Type check
-uv run mypy src/ --strict
-
-# Lint and format
-uv run ruff check src/ tests/
-uv run ruff format src/ tests/
-
-# Pre-commit (run before every commit)
-pre-commit run --all-files
-```
+This repo has no `pyproject.toml`, `tests/` directory, or `.pre-commit-config.yaml` — the standard `uv sync` / `pytest` / `mypy --strict` / `ruff` / `pre-commit` workflow described in `~/.claude/CLAUDE.md` is not wired here yet. Do not run those commands against this repo; there is currently nothing for them to target. Verify changes here by reading the diff against the node/contract patterns in `omnibase_core` and `omnibase_infra`.
 
 ---
 
 ## Pre-push Checklist
 
 ```
-[ ] uv run ruff format src/ tests/ && uv run ruff check --fix src/ tests/
-[ ] uv run pytest tests/ -v  (full suite, NO -k filter)
-[ ] uv run mypy src/ --strict
-[ ] pre-commit run --all-files
 [ ] PR title contains OMN-XXXX
 [ ] PR body cites OMN-XXXX with ## DoD evidence section
+[ ] No [skip-*] bypass tokens
 ```
