@@ -69,7 +69,7 @@ Follow existing nodes (e.g. `node_skill_pr_review_orchestrator`) exactly — no 
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `KAFKA_BOOTSTRAP_SERVERS` | Yes | Kafka bootstrap address (e.g. `192.168.86.201:19092`) |
+| `KAFKA_BOOTSTRAP_SERVERS` | Yes | Kafka bootstrap address (e.g. `<kafka-bootstrap-servers>:19092`) |
 | `ONEX_ENVIRONMENT` | No | Runtime environment label (default: `local`) |
 
 Never hardcode connection strings. Read all config from `KAFKA_BOOTSTRAP_SERVERS` or Infisical.
