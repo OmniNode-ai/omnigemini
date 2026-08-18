@@ -3,13 +3,8 @@
 ## Prerequisites
 
 - Python 3.12+
-- [`uv`](https://github.com/astral-sh/uv) for dependency management
-- `pre-commit` for local enforcement hooks
 
-```bash
-uv sync --all-groups
-pre-commit install
-```
+This repo does not yet ship a `pyproject.toml` or `.pre-commit-config.yaml` — there is no `uv sync` / `pre-commit install` step to run here today. See "Development Status" in `README.md` for the current state.
 
 ---
 
@@ -32,12 +27,7 @@ Follow the patterns in `CLAUDE.md`. For new skill nodes, copy an existing `node_
 
 ### 3. Verify before pushing
 
-```bash
-uv run ruff format src/ tests/ && uv run ruff check --fix src/ tests/
-uv run pytest tests/ -v
-uv run mypy src/ --strict
-pre-commit run --all-files
-```
+This repo has no `tests/`, `pyproject.toml`, or `.pre-commit-config.yaml`, so there is no lint/test/type-check command to run. Verify by reading the diff against existing node/contract patterns.
 
 ### 4. Open a PR
 
@@ -49,11 +39,8 @@ pre-commit run --all-files
 
 ## Code Standards
 
-All code must follow the standards in `~/.claude/CLAUDE.md` and `omni_home/CLAUDE.md`. Key rules:
+All code must follow the standards in `~/.claude/CLAUDE.md` and `omni_home/CLAUDE.md`. Key rules (style conventions to follow now; `uv`/`ruff`/`mypy`/pytest enforcement is not yet wired in this repo — see "Prerequisites" above):
 
-- Python 3.12+, `uv` for all commands.
+- Python 3.12+.
 - PEP 604 unions (`X | Y`, not `Optional[X]`).
-- `ruff` for formatting and linting.
-- `mypy --strict` target.
-- Every change ships with a unit test.
 - Never hardcode Kafka topic strings — declare in `contract.yaml`.
